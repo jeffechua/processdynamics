@@ -25,48 +25,79 @@ public struct FluidElement : IEquatable<FluidElement> {
 	public static bool operator !=(FluidElement lhs, FluidElement rhs) => !(lhs == rhs);
 }
 
-public interface Source {
-	FluidElement Pop();
+public interface ModelView {
+	ModelObject model { get; }
+	void InstantiateModel();
+	void LinkModel();
 }
 
-public interface Sink {
-	void Push(FluidElement fluidElement);
+public interface ModelObject {
+	// Under normal operation, blocked must return false between frames.
+	// blocked is allowed to be temporarily true in the middle of a frame (after some have ticked but others haven't)
+	// The blocked property is purely informational. A blocked object should not stop ticking or throw exceptions,
+	// and should automatically unblock if/when possible. We allow unblocking behaviour to be non-tick order-blind.
+	bool blocked { get; }
+	string whyBlocked { get; }
+	void Tick();
+}
+
+public interface FluidReceiver {
+	// Return true if successfully received
+	bool Insert(FluidElement fluidElement);
 }
 
 [Serializable]
-public class Pipe : Source, Sink {
+public class Pipe : FluidReceiver, ModelObject {
 
 	// Design variables
 	public readonly int length;
-	public Source source;
-	public Sink sink;
+	public FluidReceiver receiver;
 
 	// Operating variables
-	int pointer;
-	bool _isAwaitingPush;
-	public bool isAwaitingPush { get => _isAwaitingPush; }
+	int outgoingPointer;
+	int incomingPointer;
+	public bool blocked { get => inventory[incomingPointer] != default; }
+	public string whyBlocked { get => "No receiver or receiver is blocked."; }
 	public FluidElement[] inventory;
 
 	public Pipe(int length) {
 		this.length = length;
 		inventory = new FluidElement[length + 1];
+		outgoingPointer = 1;
 	}
 
-	public FluidElement Pop() {
-		if (_isAwaitingPush)
-			throw new Exception("Tried to pull from awaiting pipe.");
-		FluidElement retval = inventory[pointer];
-		inventory[pointer] = default;
-		_isAwaitingPush = true;
-		return retval;
+	/* Insert() is called by the pipe's source's Tick(). This pipe's Tick() and Insert() may be called in any order.
+	 * Denoting V as the incoming pointer and ^ as the outgoing pointer, we may thus have
+	 * 
+	 *      V   ^               ^V                        ^   V
+	 *    |   | A |   >Tick()  |   |   |   >Insert(B)   | B |   |
+	 *    
+	 *    or
+	 *    
+	 *      V   ^                      V^                 ^   V
+	 *    |   | A |   >Insert(B)  | B | A |   >Tick()   | B |   |
+	 *    
+	 *                        (temporarily reads
+	 *                         as blocked here)
+	 *                         
+	 * Hence, a pipe (and any other vessel) must have at least 1 element, and therefore 2 inventory.
+	 * Unblocking behaviour after a true block is not tick order blind as whether the pipe ticks before its provider
+	 * determines whether the provider's tick will go through on that frame.
+	 */
+
+	public void Tick() {
+		if (receiver != null && receiver.Insert(inventory[outgoingPointer])) {
+			inventory[outgoingPointer] = default;
+			outgoingPointer = (outgoingPointer + 1) % length;
+		}
 	}
 
-	public void Push(FluidElement fluidElement) {
-		if (!_isAwaitingPush)
-			throw new Exception("Tried to push to full pipe.");
-		inventory[pointer] = fluidElement;
-		pointer = (pointer + 1) % length;
-		_isAwaitingPush = false;
+	public bool Insert(FluidElement fluidElement) {
+		if (inventory[incomingPointer] != default)
+			return false;
+		inventory[incomingPointer] = fluidElement;
+		incomingPointer = (incomingPointer + 1) % length;
+		return true;
 	}
 
 

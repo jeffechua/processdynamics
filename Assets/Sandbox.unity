@@ -1096,7 +1096,7 @@ SpriteRenderer:
   m_LightmapParameters: {fileID: 0}
   m_SortingLayerID: 0
   m_SortingLayer: 0
-  m_SortingOrder: -1
+  m_SortingOrder: 0
   m_Sprite: {fileID: 21300000, guid: 644b27128d3544f2fb6ceca46236f77c, type: 3}
   m_Color: {r: 0, g: 0, b: 0, a: 1}
   m_FlipX: 0
@@ -1644,10 +1644,11 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   length: 5
-  vertices: []
-  updateDisplay: 0
-  alignees:
-  - {fileID: 665422855}
+  attachments:
+  - attached: {fileID: 665422855}
+    position: 0
+  snapAttachments: 0
+  locateAttachments: 0
   model:
     inventory: []
 --- !u!1 &1999239123

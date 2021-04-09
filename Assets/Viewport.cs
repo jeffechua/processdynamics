@@ -10,25 +10,11 @@ public class Viewport : MonoBehaviour {
 	public Transform gBar;
 	public Transform bBar;
 
-	public FluidElement userSetState;
-	public bool usingUserSetState;
-
-	FluidElement _state;
-	public FluidElement state {
-		set {
-			if (_state != value) {
-				_state = value;
-				Redraw();
-			}
-		}
-		get => _state;
-	}
+	public FluidElement state;
 
 	// Update is called once per frame
 	void Update() {
-		if (usingUserSetState) {
-			state = userSetState;
-		}
+		Redraw();
 	}
 
 	void Redraw() {
