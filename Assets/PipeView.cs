@@ -1,64 +1,69 @@
 using System;
+using System.Linq;
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 
-public class PipeView : MonoBehaviour, ModelView {
+public class PipeView : ModelView {
 
 	LineRenderer line;
 
 	// Design variables
 	public int nElements;
-	public ModelView source;
-	public ModelView sink;
+	public ModelView receiver;
 
 	// Display variables
-	public Transform[] attachments;
+	public ModelView[] attached;
 	public bool snapAttachments;
 	Vector3[] vertices;
 	float[] lengths;
 
 	// Model
-	Pipe _model;
-	public ModelObject model { get => _model; }
+	public PipeModel pipeModel;
+	public override ModelObject model { get => pipeModel; }
+
+	public override void InitModel() {
+		pipeModel = new PipeModel(nElements);
+	}
+	public override void LinkModel() {
+		pipeModel.receiver = Util.TryCast<FluidReceiver>(receiver?.model);
+		pipeModel.attachments = attached
+			.Select((att, i) => new PipeAttachment((PipeAttachable)att?.model, i))
+			.Where((attachment) => attachment.attached != null).ToArray(); // Inefficient, but not a big deal.
+	}
 
 	private void Start() {
+		ProcessMaster.modelViews.Add(this);
 		line = GetComponent<LineRenderer>();
 		if (vertices == null) {
 			vertices = new Vector3[line.positionCount];
 			line.GetPositions(vertices);
 			SetVertices(vertices);
 		}
-		if (attachments == null) {
-			attachments = new Transform[nElements];
-		} else if (attachments.Length < nElements) {
+		if (attached == null) {
+			attached = new Viewport[nElements];
+		} else if (attached.Length < nElements) {
 			// Locate which element each attachment is attached to; if multiple are in the same location, we do
 			// first-come-first-serve, and bump any latecomers down.
-			Transform[] unlocated = attachments;
-			attachments = new Transform[nElements];
+			ModelView[] unlocated = attached;
+			attached = new Viewport[nElements];
 			for (int i = 0; i < unlocated.Length; i++) {
-				int j = Mathf.RoundToInt(Project(unlocated[i].position) * nElements - 0.5f); // new location
+				int j = Mathf.RoundToInt(Project(unlocated[i].transform.position) * nElements - 0.5f); // new location
 				j = Mathf.Clamp(j, 0, nElements - 1);
-				while (attachments[j % nElements] != null) j++;
-				attachments[j % nElements] = unlocated[i];
+				while (attached[j % nElements] != null) j++;
+				attached[j % nElements] = unlocated[i];
 			}
 		}
 	}
 
 	private void Update() {
+		line.material.color = (model?.blocked ?? false) ? Color.yellow : Color.white;
 		if (snapAttachments) {
 			snapAttachments = false;
 			for (int i = 0; i < nElements; i++)
-				if (attachments[i] != null)
-					SnapToLine(attachments[i], parameter: (i + 0.5f) / nElements);
+				if (attached[i] != null)
+					SnapToLine(attached[i].transform, parameter: (i + 0.5f) / nElements);
 		}
-	}
-
-	public void InstantiateModel() {
-		_model = new Pipe(nElements);
-	}
-	public void LinkModel() {
-		_model.receiver = (sink.model is FluidReceiver) ? (FluidReceiver) sink.model : null;
 	}
 
 	public void SetVertices(Vector3[] vertices) {
@@ -72,29 +77,17 @@ public class PipeView : MonoBehaviour, ModelView {
 		line.SetPositions(vertices);
 	}
 
+	// Transformation functions between pipe and world space.
+	public Vector3 PointOnSegment(int seg, float param) => transform.TransformPoint(Vector3.Lerp(vertices[seg], vertices[seg + 1], param));
+	public Vector3 DirectionOfSegment(int segment) => transform.TransformDirection(vertices[segment + 1] - vertices[segment]);
 	public Vector3 PointOnLine(float parameter) {
-		if (parameter < 0) return vertices[0];
-		if (parameter > 1) return vertices[vertices.Length - 1];
 		Specify(parameter, out int segment, out float specificParam);
 		return PointOnSegment(segment, specificParam);
 	}
 
-	public Vector3 PointOnSegment(int segment, float specificParam)
-		=> transform.TransformPoint(Vector3.Lerp(vertices[segment], vertices[segment + 1], specificParam));
-
-	public Vector3 DirectionOfSegment(int segment) => transform.TransformDirection(vertices[segment + 1] - vertices[segment]);
-
 	// specificParam returns the lerp parameter between vertices[i] and vertices[i+1].
 	public bool ProjectSpecific(Vector3 point, out int segment, out float specificParam) {
-
 		point = transform.InverseTransformPoint(point);
-
-		if (vertices.Length <= 1) {
-			segment = -1;
-			specificParam = -1;
-			return false;
-		}
-
 		int closest = 0;
 		float closestMinDistance = -1;
 		float specificParamOfClosest = 0;
@@ -103,30 +96,23 @@ public class PipeView : MonoBehaviour, ModelView {
 			float minDistance;
 			float param = Vector3.Dot(point - vertices[i], dir) / dir.sqrMagnitude; // 0 to 1 on the segment
 			/* If the point is not between the two vertices, use distance to the closer vertex instead of perp. distance
-			 *
 			 *      *     *
 			 *      |    /       ~ : the line segment being considered
 			 *      |   /        | : the min distance derived
 			 *    ~~~~~~
 			 */
-			if (param < 0) {
-				minDistance = (vertices[i] - point).magnitude;
-			} else if (param > 1) {
-				minDistance = (vertices[i + 1] - point).magnitude;
-			} else {
-				minDistance = Mathf.Abs(Vector3.Dot(point - vertices[i], Vector2.Perpendicular(dir).normalized));
-			}
+			minDistance = param < 0 ? (vertices[i] - point).magnitude :
+						 (param > 1 ? (vertices[i + 1] - point).magnitude :
+						  Mathf.Abs(Vector3.Dot(point - vertices[i], Vector2.Perpendicular(dir).normalized)));
 			if (closestMinDistance == -1 || minDistance < closestMinDistance) {
 				closest = i;
 				closestMinDistance = minDistance;
 				specificParamOfClosest = param;
 			}
 		}
-
 		segment = closest;
 		specificParam = specificParamOfClosest;
 		return true;
-
 	}
 
 	public float Project(Vector3 point) {
@@ -151,6 +137,86 @@ public class PipeView : MonoBehaviour, ModelView {
 		}
 		t.position = PointOnSegment(segment, specificParam);
 		t.rotation = Quaternion.FromToRotation(Vector3.right, DirectionOfSegment(segment));
+	}
+
+}
+
+[Serializable]
+public struct PipeAttachment {
+	public PipeAttachable attached;
+	public int location;
+	public PipeAttachment(PipeAttachable attached, int location) {
+		this.attached = attached;
+		this.location = location;
+	}
+}
+
+public interface PipeAttachable {
+	void Transmit(FluidElement element);
+}
+
+// A pipe is not a FluidProvider because FluidProvider marks objects which accept Withdraw() requests;
+// a pipe only pushes fluid elements downstream and does not accept requests from the receiver.
+// Similarly, a pipe does not make requests of its upstream; it only pushes and never pulls.
+[Serializable]
+public class PipeModel : ModelObject, FluidReceiver {
+
+	// Design variables
+	public readonly int length;
+	public FluidReceiver receiver;
+	public PipeAttachment[] attachments;
+	bool valid { get => length != 0 && inventory != null && inventory.Length == length + 1; }
+
+	// Operating variables
+	int pointer;
+	int ppointer { get => (pointer + 1) % inventory.Length; }
+	public override bool blocked { get => valid && inventory[pointer] != default; }
+	public override string whyBlocked { get => "No receiver or receiver is blocked."; }
+	public FluidElement[] inventory;
+
+	public PipeModel(int length) {
+		this.length = length;
+		inventory = new FluidElement[length + 1];
+	}
+
+	/* Insert() places into pointer (denoted V below) and Tick() pushes from (pointer+1) (denoted ^ below). They
+	 * may occur in any order.
+	 * 
+	 *      V   ^                V   ^                    V   ^
+	 *    |   | A |   >Tick()  |   |   |   >Insert(B)   | B |   |
+	 *    
+	 *    or
+	 *    
+	 *      V   ^                   V   ^                 V   ^
+	 *    |   | A |   >Insert(B)  | B | A |   >Tick()   | B |   |
+	 *    
+	 *                        (temporarily reads
+	 *                         as blocked here)
+	 *                         
+	 * Hence, a pipe has an inventory of length+1.
+	 * Unblocking behaviour after a true block is not tick order blind as whether the pipe ticks before its provider
+	 * determines whether the provider's tick will go through on that frame.
+	 */
+
+	public override void Tick() {
+		if (receiver != null && receiver.Insert(inventory[ppointer]))
+			inventory[ppointer] = default;
+	}
+
+	public override void Tock() {
+		foreach (PipeAttachment attachment in attachments)
+			attachment.attached.Transmit(inventory[(pointer + inventory.Length - attachment.location) % inventory.Length]);
+		if (inventory[ppointer] == default)
+			pointer = ppointer;
+		// else, it blocks and the next Insert() returns false.
+	}
+
+	public bool Insert(FluidElement fluidElement) {
+		if (inventory[pointer] == default) {
+			inventory[pointer] = fluidElement;
+			return true;
+		}
+		return false;
 	}
 
 }
